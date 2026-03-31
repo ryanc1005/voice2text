@@ -102,4 +102,4 @@ voice2text/
 
 ## 授權
 
-私人專案，僅供內部使用。
+本專案採用 [MIT License](LICENSE) 授權。
