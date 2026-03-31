@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}設定 — Voice2Text{% endblock %}
+{% block nav_settings %}font-semibold text-gray-900{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-2xl font-bold text-gray-900">設定</h1>
+
+    <form id="settings-form" class="space-y-6">
+        <!-- API Keys -->
+        <div class="bg-white rounded-lg shadow p-6 space-y-5">
+            <h2 class="text-lg font-semibold text-gray-800">API Keys</h2>
+            <p class="text-sm text-gray-500">填入各服務商的 API Key。此處設定會覆蓋 .env 檔案中的值。</p>
+
+            <!-- OpenAI -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">OpenAI API Key</label>
+                <div class="flex gap-2">
+                    <input type="password" id="openai_api_key" name="openai_api_key"
+                        class="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="sk-...">
+                    <button type="button" onclick="toggleVisibility('openai_api_key')"
+                        class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">顯示</button>
+                </div>
+                <p class="mt-1 text-xs text-gray-400">用於 Whisper 語音辨識與 GPT 文字優化</p>
+            </div>
+
+            <!-- Google -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Google API Key</label>
+                <div class="flex gap-2">
+                    <input type="password" id="google_api_key" name="google_api_key"
+                        class="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="AIza...">
+                    <button type="button" onclick="toggleVisibility('google_api_key')"
+                        class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">顯示</button>
+                </div>
+            </div>
+
+            <!-- Google Credentials -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Google 服務帳號 JSON 路徑</label>
+                <input type="text" id="google_credentials" name="google_credentials"
+                    class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="/path/to/service-account.json">
+            </div>
+
+            <!-- ElevenLabs -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">ElevenLabs API Key</label>
+                <div class="flex gap-2">
+                    <input type="password" id="elevenlabs_api_key" name="elevenlabs_api_key"
+                        class="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="xi-...">
+                    <button type="button" onclick="toggleVisibility('elevenlabs_api_key')"
+                        class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">顯示</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 預設設定 -->
+        <div class="bg-white rounded-lg shadow p-6 space-y-4">
+            <h2 class="text-lg font-semibold text-gray-800">預設選項</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">預設服務商</label>
+                    <select id="default_provider" name="default_provider"
+                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">預設模型</label>
+                    <select id="default_model" name="default_model"
+                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">預設語言</label>
+                    <select id="default_language" name="default_language"
+                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- 儲存按鈕 -->
+        <div class="flex justify-end gap-3">
+            <span id="save-status" class="text-sm text-green-600 self-center hidden">已儲存</span>
+            <button type="submit"
+                class="px-6 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition">
+                儲存設定
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let providersData = {};
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // 載入服務商清單
+    const provRes = await fetch('/api/providers');
+    const provData = await provRes.json();
+    providersData = provData.providers;
+
+    const providerSelect = document.getElementById('default_provider');
+    for (const [key, val] of Object.entries(providersData)) {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = val.name;
+        providerSelect.appendChild(opt);
+    }
+    providerSelect.addEventListener('change', updateDefaultModels);
+
+    const langSelect = document.getElementById('default_language');
+    for (const lang of provData.languages) {
+        const opt = document.createElement('option');
+        opt.value = lang.code;
+        opt.textContent = lang.name;
+        langSelect.appendChild(opt);
+    }
+
+    // 載入目前設定
+    const settingsRes = await fetch('/api/settings');
+    const settings = await settingsRes.json();
+
+    document.getElementById('openai_api_key').value = settings.openai_api_key || '';
+    document.getElementById('google_api_key').value = settings.google_api_key || '';
+    document.getElementById('google_credentials').value = settings.google_credentials || '';
+    document.getElementById('elevenlabs_api_key').value = settings.elevenlabs_api_key || '';
+    document.getElementById('default_provider').value = settings.default_provider || 'openai';
+    updateDefaultModels();
+    document.getElementById('default_model').value = settings.default_model || 'whisper-1';
+    document.getElementById('default_language').value = settings.default_language || 'zh';
+});
+
+function updateDefaultModels() {
+    const provider = document.getElementById('default_provider').value;
+    const modelSelect = document.getElementById('default_model');
+    modelSelect.innerHTML = '';
+    const models = providersData[provider]?.models || [];
+    for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name;
+        modelSelect.appendChild(opt);
+    }
+}
+
+// 顯示/隱藏密碼
+function toggleVisibility(fieldId) {
+    const input = document.getElementById(fieldId);
+    const btn = input.nextElementSibling || input.parentElement.querySelector('button');
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (btn) btn.textContent = '隱藏';
+    } else {
+        input.type = 'password';
+        if (btn) btn.textContent = '顯示';
+    }
+}
+
+// 儲存設定
+document.getElementById('settings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const data = {
+        openai_api_key: document.getElementById('openai_api_key').value,
+        google_api_key: document.getElementById('google_api_key').value,
+        google_credentials: document.getElementById('google_credentials').value,
+        elevenlabs_api_key: document.getElementById('elevenlabs_api_key').value,
+        default_provider: document.getElementById('default_provider').value,
+        default_model: document.getElementById('default_model').value,
+        default_language: document.getElementById('default_language').value,
+    };
+
+    await fetch('/api/settings', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+    });
+
+    const status = document.getElementById('save-status');
+    status.classList.remove('hidden');
+    setTimeout(() => status.classList.add('hidden'), 2000);
+});
+</script>
+{% endblock %}

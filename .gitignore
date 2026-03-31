@@ -1,0 +1,19 @@
+# 機密檔案
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 資料與輸出（含使用者音檔、任務記錄、轉錄結果）
+sources/
+data/
+output/
+chunks/
+
+# 開發計畫
+plans/
+
+# 系統檔案
+.DS_Store

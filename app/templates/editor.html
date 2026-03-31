@@ -1,0 +1,403 @@
+{% extends "base.html" %}
+{% block title %}編輯 — Voice2Text{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+<style>
+    .editor-container { height: calc(100vh - 180px); }
+    .EasyMDEContainer { height: 100%; }
+    .EasyMDEContainer .CodeMirror { height: calc(100% - 50px); }
+    .saving-indicator { transition: opacity 0.3s; }
+
+    /* AI 優化進度面板 */
+    .refine-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 50;
+    }
+    .refine-panel {
+        background: white;
+        border-radius: 12px;
+        padding: 24px;
+        width: 480px;
+        max-width: 90vw;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+
+    /* 打字機動畫光標 */
+    .typing-cursor {
+        display: inline-block;
+        width: 2px;
+        height: 1em;
+        background: #7c3aed;
+        animation: blink 0.8s step-end infinite;
+        vertical-align: text-bottom;
+        margin-left: 1px;
+    }
+    @keyframes blink {
+        50% { opacity: 0; }
+    }
+
+    /* Wave 動畫 */
+    .wave-sm {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        height: 14px;
+    }
+    .wave-sm .bar {
+        width: 2.5px;
+        height: 100%;
+        background-color: #7c3aed;
+        border-radius: 1.5px;
+        animation: wave-sm 1.2s ease-in-out infinite;
+    }
+    .wave-sm .bar:nth-child(1) { animation-delay: -0.4s; }
+    .wave-sm .bar:nth-child(2) { animation-delay: -0.3s; }
+    .wave-sm .bar:nth-child(3) { animation-delay: -0.2s; }
+    .wave-sm .bar:nth-child(4) { animation-delay: -0.1s; }
+
+    @keyframes wave-sm {
+        0%, 40%, 100% { transform: scaleY(0.3); }
+        20% { transform: scaleY(1); }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+    <!-- 工具列 -->
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <a href="/" class="text-sm text-gray-500 hover:text-gray-700">&larr; 返回</a>
+            <h1 id="editor-title" class="text-lg font-bold text-gray-900">載入中...</h1>
+            <span id="save-indicator" class="saving-indicator text-xs text-gray-400 opacity-0">已儲存</span>
+        </div>
+        <div class="flex gap-2">
+            <button onclick="refineContent()"
+                class="px-4 py-2 bg-purple-600 text-white text-sm rounded-md hover:bg-purple-700 transition flex items-center gap-2"
+                id="refine-btn">
+                AI 優化
+            </button>
+            <button onclick="saveContent()"
+                class="px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition">
+                儲存
+            </button>
+            <a id="export-link" href="#"
+                class="px-4 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition inline-block">
+                匯出 .md
+            </a>
+        </div>
+    </div>
+
+    <!-- 編輯器 -->
+    <div class="editor-container bg-white rounded-lg shadow">
+        <textarea id="md-editor"></textarea>
+    </div>
+</div>
+
+<!-- AI 優化進度面板 -->
+<div id="refine-overlay" class="refine-overlay hidden">
+    <div class="refine-panel">
+        <div class="flex items-center gap-3 mb-4">
+            <span class="wave-sm">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            </span>
+            <h3 class="text-lg font-semibold text-gray-900">AI 優化中</h3>
+        </div>
+
+        <!-- 狀態資訊 -->
+        <div class="mb-4 space-y-2">
+            <div class="flex justify-between text-sm">
+                <span class="text-gray-500" id="refine-status">準備中...</span>
+                <span class="text-gray-400" id="refine-timer">0 秒</span>
+            </div>
+            <!-- 進度條 -->
+            <div class="w-full bg-gray-200 rounded-full h-2">
+                <div id="refine-progress" class="bg-purple-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+            </div>
+            <div class="flex justify-between text-xs text-gray-400">
+                <span id="refine-chars">0 字</span>
+                <span id="refine-estimate"></span>
+            </div>
+        </div>
+
+        <!-- 即時預覽（最後幾行） -->
+        <div class="bg-gray-50 rounded-lg p-3 h-32 overflow-hidden relative">
+            <div class="text-xs text-gray-400 mb-1">即時預覽</div>
+            <div id="refine-preview" class="text-sm text-gray-700 leading-relaxed overflow-hidden h-24">
+                <span class="text-gray-400">等待 AI 回應...</span>
+            </div>
+        </div>
+
+        <!-- 取消按鈕 -->
+        <div class="mt-4 flex justify-end">
+            <button onclick="cancelRefine()" class="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50">
+                取消
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+<script>
+const taskId = '{{ task_id }}';
+let easyMDE;
+let saveTimeout;
+let isModified = false;
+let refineEventSource = null;
+let refineTimerInterval = null;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    easyMDE = new EasyMDE({
+        element: document.getElementById('md-editor'),
+        spellChecker: false,
+        autosave: { enabled: false },
+        toolbar: [
+            'bold', 'italic', 'heading', '|',
+            'quote', 'unordered-list', 'ordered-list', '|',
+            'link', 'image', '|',
+            'preview', 'side-by-side', 'fullscreen', '|',
+            'guide'
+        ],
+        sideBySideFullscreen: false,
+        status: ['lines', 'words', 'cursor'],
+    });
+
+    const res = await fetch(`/api/tasks/${taskId}`);
+    if (!res.ok) {
+        easyMDE.value('# 找不到任務\n\n此任務不存在或已被刪除。');
+        return;
+    }
+    const task = await res.json();
+
+    document.getElementById('editor-title').textContent = task.filename;
+    document.getElementById('export-link').href = `/api/tasks/${taskId}/export`;
+
+    if (task.content) {
+        easyMDE.value(task.content);
+    } else if (task.status === 'processing') {
+        easyMDE.value('# 轉錄進行中...\n\n請稍候，轉錄完成後內容會自動載入。');
+        pollForContent();
+    } else {
+        easyMDE.value('# 尚無內容\n\n此任務尚未開始轉錄。');
+    }
+
+    easyMDE.codemirror.on('change', () => {
+        isModified = true;
+        clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(() => {
+            if (isModified) saveContent();
+        }, 1000);
+    });
+});
+
+// 儲存內容
+async function saveContent() {
+    const content = easyMDE.value();
+    await fetch(`/api/tasks/${taskId}/content`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ content }),
+    });
+    isModified = false;
+
+    const indicator = document.getElementById('save-indicator');
+    indicator.style.opacity = '1';
+    setTimeout(() => { indicator.style.opacity = '0'; }, 1500);
+}
+
+// AI 優化（streaming）
+let refineAbortController = null;
+
+async function refineContent() {
+    const btn = document.getElementById('refine-btn');
+    btn.disabled = true;
+    btn.classList.add('opacity-50');
+
+    const overlay = document.getElementById('refine-overlay');
+    overlay.classList.remove('hidden');
+
+    // 重置面板
+    document.getElementById('refine-status').textContent = '連接 AI 中...';
+    document.getElementById('refine-timer').textContent = '0 秒';
+    document.getElementById('refine-progress').style.width = '0%';
+    document.getElementById('refine-progress').className = 'bg-purple-600 h-2 rounded-full transition-all';
+    document.getElementById('refine-chars').textContent = '0 字';
+    document.getElementById('refine-estimate').textContent = '';
+    document.getElementById('refine-preview').innerHTML = '<span class="text-gray-400">等待 AI 回應...</span>';
+
+    let elapsed = 0;
+    refineTimerInterval = setInterval(() => {
+        elapsed++;
+        document.getElementById('refine-timer').textContent = `${elapsed} 秒`;
+    }, 1000);
+
+    let fullContent = '';
+    let originalCharCount = 0;
+    refineAbortController = new AbortController();
+
+    try {
+        const response = await fetch(`/api/tasks/${taskId}/refine`, {
+            method: 'POST',
+            signal: refineAbortController.signal,
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || '優化失敗');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+
+            // SSE 格式：事件以雙換行分隔（sse-starlette 用 \r\n\r\n）
+            // 統一處理 \r\n 和 \n
+            const normalized = buffer.replace(/\r\n/g, '\n');
+            const blocks = normalized.split('\n\n');
+            buffer = blocks.pop() || '';
+
+            for (const block of blocks) {
+                if (!block.trim()) continue;
+
+                let eventType = 'message';
+                let dataStr = '';
+
+                for (const line of block.split('\n')) {
+                    if (line.startsWith('event:')) {
+                        eventType = line.slice(6).trim();
+                    } else if (line.startsWith('data:')) {
+                        dataStr += line.slice(5).trim();
+                    }
+                }
+
+                if (!dataStr) continue;
+
+                try {
+                    const data = JSON.parse(dataStr);
+                    handleRefineEvent(eventType, data);
+                } catch (_) {}
+            }
+        }
+
+        // stream 結束，如果沒收到 done 事件，手動完成
+        if (fullContent) {
+            easyMDE.value(fullContent);
+            isModified = false;
+            finishRefine('優化完成！');
+        }
+
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            finishRefine('已取消', false);
+        } else {
+            finishRefine(`錯誤：${e.message}`, true);
+        }
+    }
+
+    function handleRefineEvent(event, data) {
+        if (event === 'start') {
+            originalCharCount = data.char_count || 0;
+            const est = data.estimated_seconds || 30;
+            document.getElementById('refine-status').textContent = data.message || 'AI 處理中...';
+            document.getElementById('refine-estimate').textContent = `預估 ${est} 秒`;
+        }
+        else if (event === 'chunk') {
+            fullContent += (data.text || '');
+            const outputChars = fullContent.length;
+
+            document.getElementById('refine-chars').textContent = `${outputChars} 字`;
+
+            const progress = Math.min(95, Math.round((outputChars / Math.max(originalCharCount, 1)) * 100));
+            document.getElementById('refine-progress').style.width = `${progress}%`;
+
+            document.getElementById('refine-status').textContent = `AI 正在輸出（${outputChars} 字）...`;
+
+            const previewEl = document.getElementById('refine-preview');
+            const previewLines = fullContent.split('\n').slice(-5).join('\n');
+            previewEl.innerHTML = escapeHtml(previewLines) + '<span class="typing-cursor"></span>';
+            previewEl.scrollTop = previewEl.scrollHeight;
+        }
+        else if (event === 'done') {
+            fullContent = data.content || fullContent;
+            easyMDE.value(fullContent);
+            isModified = false;
+            finishRefine('優化完成！');
+        }
+        else if (event === 'error') {
+            finishRefine(`錯誤：${data.message}`, true);
+        }
+    }
+
+    function finishRefine(message, isError = false) {
+        clearInterval(refineTimerInterval);
+        refineAbortController = null;
+        document.getElementById('refine-status').textContent = message;
+        document.getElementById('refine-progress').style.width = '100%';
+
+        if (isError) {
+            document.getElementById('refine-progress').className = 'bg-red-500 h-2 rounded-full transition-all';
+        } else {
+            document.getElementById('refine-progress').className = 'bg-green-500 h-2 rounded-full transition-all';
+        }
+
+        const cursor = document.querySelector('.typing-cursor');
+        if (cursor) cursor.remove();
+
+        setTimeout(() => {
+            overlay.classList.add('hidden');
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+            document.getElementById('refine-progress').className = 'bg-purple-600 h-2 rounded-full transition-all';
+        }, isError ? 3000 : 1500);
+    }
+}
+
+// 取消優化
+function cancelRefine() {
+    if (refineAbortController) {
+        refineAbortController.abort();
+        refineAbortController = null;
+    }
+    clearInterval(refineTimerInterval);
+    document.getElementById('refine-overlay').classList.add('hidden');
+    document.getElementById('refine-btn').disabled = false;
+    document.getElementById('refine-btn').classList.remove('opacity-50');
+}
+
+// HTML 跳脫
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 輪詢等待轉錄完成
+function pollForContent() {
+    const interval = setInterval(async () => {
+        const res = await fetch(`/api/tasks/${taskId}`);
+        const task = await res.json();
+        if (task.status === 'completed' && task.content) {
+            easyMDE.value(task.content);
+            clearInterval(interval);
+        } else if (task.status === 'failed') {
+            easyMDE.value(`# 轉錄失敗\n\n${task.error || '未知錯誤'}`);
+            clearInterval(interval);
+        }
+    }, 3000);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,17 @@
+[project]
+name = "voice2text"
+version = "0.1.0"
+description = "語音轉文字 Web 應用 — 支援 OpenAI / Google / ElevenLabs 多模型"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "jinja2>=3.1.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.9",
+    "openai>=1.0",
+    "google-cloud-speech>=2.0",
+    "elevenlabs>=1.0",
+    "sse-starlette>=2.0",
+    "pydantic-settings>=2.0",
+]
